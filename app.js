@@ -12,7 +12,7 @@
     words: ld('wa_words', []), base: ld('wa_base', {}), set: Object.assign({}, DEF, ld('wa_set', {})),
     view: 'study', study: null, listen: null, search: '', fl: { lang: '전체', source: '전체', st: '활성' }, shown: 100,
     sync: { busy: false, state: 'local', last: 0 },
-    prog: ld('wa_prog', {}), setSel: null, chunk: 0,
+    prog: ld('wa_prog', {}), setSel: null, chunk: 0, multi: [], multiMode: false,
   };
   if (!S.set.v4) { S.set.filter.mode = 'all'; S.set.filter.order = 'seq'; S.set.chunk = 30; S.set.v4 = 1; }
   S.set.filter = Object.assign({}, DEF.filter, S.set.filter);
@@ -136,8 +136,11 @@
   const FLOW = ['learn', 'recall', 'spell', 'test'];
   const MN = { learn: ['📖', '암기학습'], recall: ['🃏', '리콜학습(4지선다)'], spell: ['⌨️', '스펠학습'], test: ['📝', '테스트'], match: ['🧩', '매칭게임'], crash: ['☄️', '크래시'] };
   const actv = () => S.words.filter(w => !w.deleted && w.word && w.meaning);
+  const MULTI = '__multi:';
+  const titleOf = key => SPECIAL[key] || (key.startsWith(MULTI) ? `🧩 합친 세트 (${key.slice(MULTI.length).split('|').length}개)` : key);
   function setWords(key) {
     const a = actv();
+    if (key.startsWith(MULTI)) { const names = new Set(key.slice(MULTI.length).split('|')); return a.filter(w => names.has(w.source)); }
     if (key === '__wrong') return a.filter(w => w.wrong > w.right);
     if (key === '__star') return a.filter(w => w.star > 0);
     if (key === '__all') return a;
@@ -178,14 +181,17 @@
     A.forEach(w => { const e = by.get(w.source) || { n: 0, d: 0 }; e.n++; if (w.done) e.d++; by.set(w.source, e); });
     const card = ([name, e]) => {
       const ch = chunkList(name), ok = ch.filter((_, i) => stageOf(name, i, 'test')).length;
-      return `<button class="setcard" data-act="openset" data-key="${esc(name)}"><div class="t">${esc(name || '(출처 없음)')}</div>
+      const on = S.multiMode && S.multi.includes(name);
+      return `<button class="setcard ${on ? 'sel' : ''}" data-act="${S.multiMode ? 'togglesel' : 'openset'}" data-key="${esc(name)}"><div class="t">${S.multiMode ? (on ? '☑ ' : '☐ ') : ''}${esc(name || '(출처 없음)')}</div>
         <div class="muted">${e.n}단어 · 구간 ${ok}/${ch.length} 완료</div><div class="bar"><i style="width:${Math.round(e.d / e.n * 100)}%;background:var(--ok)"></i></div><div class="muted">암기 ${e.d}/${e.n}</div></button>`;
     };
     const sp = k => `<button class="setcard" data-act="openset" data-key="${k}"><div class="t">${SPECIAL[k]}</div><div class="muted">${setWords(k).length}단어</div></button>`;
     main().innerHTML = `<div class="row fixed" style="align-items:center;margin-bottom:8px"><h2 style="margin:0;flex:1">학습할 세트를 고르세요</h2>
-      <select data-f="lang" style="width:auto">${opts(langs(), lg, true)}</select></div>
-      <div class="setgrid">${sp('__wrong')}${sp('__star')}${sp('__all')}</div>
-      <h2 style="margin-top:14px">세트 (출처별)</h2><div class="setgrid">${[...by].map(card).join('') || '<p class="muted">단어가 없어요</p>'}</div>`;
+      <button class="${S.multiMode ? 'on' : ''}" data-act="multimode">☑ 합쳐서 학습</button><select data-f="lang" style="width:auto">${opts(langs(), lg, true)}</select></div>
+      ${S.multiMode ? '<p class="muted">합칠 세트를 2개 이상 선택하세요. (임시로 합쳐서 학습하는 것이라 단어/시트는 바뀌지 않아요)</p>' : ''}
+      ${S.multiMode ? '' : `<div class="setgrid">${sp('__wrong')}${sp('__star')}${sp('__all')}</div>`}
+      <h2 style="margin-top:14px">세트 (출처별)</h2><div class="setgrid">${[...by].map(card).join('') || '<p class="muted">단어가 없어요</p>'}</div>
+      ${S.multiMode ? `<div class="multibar"><span>${S.multi.length}개 세트 · ${S.multi.reduce((n, k) => n + (by.get(k) ? by.get(k).n : 0), 0)}단어</span><button class="pri" data-act="multistart" ${S.multi.length < 2 ? 'disabled' : ''}>합쳐서 학습 ▶</button></div>` : ''}`;
     bindFilters();
   }
   function setDetail() {
@@ -194,7 +200,8 @@
     const ci = S.chunk, list = chunks[ci], f = S.set.filter;
     const rows = list.length;
     const step = (m, i) => { const d = stageOf(key, ci, m); return `<button class="step ${d ? 'dn' : ''}" data-act="mode" data-m="${m}"><b>${i ? i : ''}</b><i>${MN[m][0]}</i><span>${MN[m][1]}${m === 'test' && (S.prog[pkey(key, ci)] || {}).best != null ? ` · 최고 ${S.prog[pkey(key, ci)].best}점` : ''}${m === 'match' && (S.prog[pkey(key, ci)] || {}).matchBest != null ? ` · 최고 ${S.prog[pkey(key, ci)].matchBest}초` : ''}${m === 'crash' && (S.prog[pkey(key, ci)] || {}).crashBest != null ? ` · 최고 ${S.prog[pkey(key, ci)].crashBest}점` : ''}</span><em>${d ? '✔ ' + d.slice(5) : ''}</em></button>`; };
-    main().innerHTML = `<div class="row fixed" style="align-items:center"><button class="ghost" data-act="backsets">← 세트</button><h2 style="margin:0;flex:1">${esc(SPECIAL[key] || key)}</h2></div>
+    main().innerHTML = `<div class="row fixed" style="align-items:center"><button class="ghost" data-act="backsets">← 세트</button><h2 style="margin:0;flex:1">${esc(titleOf(key))}</h2></div>
+      ${key.startsWith(MULTI) ? `<p class="muted">${key.slice(MULTI.length).split('|').map(esc).join(' + ')}</p>` : ''}
       <div class="card"><div class="row fixed" style="align-items:center;margin-bottom:8px"><span class="muted">구간 크기</span>
         <select id="chsz" style="width:auto">${[[10, '10개'], [20, '20개'], [30, '30개'], [50, '50개'], [0, '전체']].map(([k, v]) => `<option value="${k}" ${S.set.chunk === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
         <span class="muted">${rows}단어</span></div>
@@ -639,6 +646,9 @@
       case 'mode': return startStudy(b.dataset.m);
       case 'openset': S.setSel = b.dataset.key; S.chunk = 0; return render();
       case 'backsets': S.setSel = null; return render();
+      case 'multimode': S.multiMode = !S.multiMode; S.multi = []; return render();
+      case 'togglesel': { const k = b.dataset.key, i = S.multi.indexOf(k); i >= 0 ? S.multi.splice(i, 1) : S.multi.push(k); return render(); }
+      case 'multistart': if (S.multi.length < 2) return toast('세트를 2개 이상 선택하세요'); S.setSel = MULTI + S.multi.join('|'); S.chunk = 0; return render();
       case 'chunk': S.chunk = +b.dataset.i; return render();
       case 'nextchunk': S.chunk++; S.study = null; Modes.stopTimers(); return render();
       case 'restart': return startStudy(S.study.pen ? 'pen' : S.study.mode);
