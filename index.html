@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1f4e79">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>단어장</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="top">
+    <h1>단어장</h1>
+    <button id="syncBtn" class="ghost" title="동기화" data-act="sync">☁️ <span id="syncTxt">로컬</span></button>
+  </header>
+  <nav id="nav">
+    <button data-view="study"><i>🃏</i><span>학습</span></button>
+    <button data-view="listen"><i>🎧</i><span>듣기</span></button>
+    <button data-view="words"><i>📚</i><span>단어</span></button>
+    <button data-view="stats"><i>📊</i><span>통계</span></button>
+    <button data-view="settings"><i>⚙️</i><span>설정</span></button>
+  </nav>
+  <main id="main"></main>
+</div>
+<div id="toast" role="status"></div>
+<dialog id="dlg"></dialog>
+<input type="file" id="file" accept=".xlsx,.xls" hidden>
+<script src="lib/xlsx.full.min.js"></script>
+<script src="core.js"></script>
+<script src="cloud.js"></script>
+<script src="modes.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

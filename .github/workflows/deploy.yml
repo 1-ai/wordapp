@@ -1,0 +1,75 @@
+﻿name: 음성 생성 + 배포
+
+# 매일 새벽에 엑셀을 내려받아 새 단어의 음성을 만들고, 앱을 GitHub Pages에 배포합니다.
+# 코드를 push 하거나 Actions 탭에서 "Run workflow"를 눌러도 실행됩니다.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['audio/**']
+  schedule:
+    - cron: '0 19 * * *'   # 한국 시간 매일 04:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 엑셀 내려받기 (저장소 Secret XLSX_URL = Google 시트 주소)
+        id: dl
+        env:
+          XLSX_URL: ${{ secrets.XLSX_URL }}
+        run: |
+          if [ -z "$XLSX_URL" ]; then echo "XLSX_URL 없음 → 음성 생성 건너뜀"; echo "ok=0" >> $GITHUB_OUTPUT; exit 0; fi
+          id=$(printf '%s' "$XLSX_URL" | sed -n 's#.*/d/\([A-Za-z0-9_-]*\).*#\1#p')
+          [ -z "$id" ] && id="$XLSX_URL"
+          curl -fsSL "https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx" -o words.xlsx && echo "ok=1" >> $GITHUB_OUTPUT || { echo "::warning::다운로드 실패(시트 공유가 '링크가 있는 모든 사용자 - 뷰어'인지 확인)"; echo "ok=0" >> $GITHUB_OUTPUT; }
+
+      - name: 새 단어 음성 생성
+        if: steps.dl.outputs.ok == '1'
+        run: |
+          pip install edge-tts openpyxl
+          python tools/gen_audio.py words.xlsx
+          rm words.xlsx
+
+      - name: 새 음성 저장소에 커밋
+        run: |
+          git config user.name "wordapp-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add audio
+          git diff --cached --quiet || (git commit -m "음성 자동 추가" && git push)
+
+      - uses: actions/configure-pages@v5
+
+      - name: 배포 파일 모으기
+        run: |
+          mkdir _site
+          rsync -a --exclude '.git' --exclude '.github' --exclude 'tools' --exclude '_site' --exclude 'README.md' --exclude '*.xlsx' ./ _site/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4
