@@ -98,3 +98,20 @@ dialog::backdrop{background:#0008}
 .crash{position:relative;flex:1;min-height:300px;border:1px solid var(--line);border-radius:18px;overflow:hidden;background:linear-gradient(var(--card),var(--chip))}
 .fall{position:absolute;left:50%;top:0;transform:translate(-50%,0);padding:.6rem 1.2rem;background:var(--pri);color:#fff;border-radius:14px;font-size:1.5rem;font-weight:800;white-space:nowrap;max-width:94%;overflow:hidden;text-overflow:ellipsis}
 .ground{position:absolute;left:0;right:0;bottom:0;height:6px;background:var(--bad)}
+
+/* 세트(클래스카드식) */
+.setgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+.setcard{display:flex;flex-direction:column;gap:6px;text-align:left;padding:14px;background:var(--card);border:1px solid var(--line);border-radius:16px;min-height:96px}
+.setcard .t{font-weight:800;word-break:break-word}
+.pager{display:flex;gap:6px;flex-wrap:wrap}.pager button{min-height:40px;min-width:44px;padding:.3rem .7rem}
+.steps{display:flex;flex-direction:column;gap:8px}
+.step{display:grid;grid-template-columns:28px 34px 1fr auto;align-items:center;gap:6px;text-align:left;min-height:58px;background:var(--bg);border:1px solid var(--line)}
+.step b{color:var(--mute)}.step i{font-style:normal;font-size:1.4rem}.step span{font-weight:700}.step em{font-style:normal;font-size:.8rem;color:var(--ok)}
+.step.dn{border-color:var(--ok)}
+.flash.flip{animation:flipin .35s ease-out}
+@keyframes flipin{from{transform:perspective(900px) rotateY(80deg);opacity:.2}to{transform:perspective(900px) rotateY(0);opacity:1}}
+
+/* 스펠 글자 칸 */
+.slots{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin:6px 0}
+.sl{min-width:34px;height:44px;border-bottom:3px solid var(--mute);display:inline-flex;align-items:center;justify-content:center;font-size:1.6rem;font-weight:700}
+.sl.sp{border:0;min-width:14px}.sl.f{border-color:var(--pri)}.sl u{text-decoration:none;color:var(--mute);opacity:.6}

@@ -6,17 +6,19 @@
   const LANG_CODE = { 영어: 'en-US', 스페인어: 'es-ES', 일본어: 'ja-JP', 중국어: 'zh-CN', 한국어: 'ko-KR', 프랑스어: 'fr-FR', 독일어: 'de-DE' };
 
   const DEF = { theme: 'auto', fs: 1, rate: 0.9, wake: true, autoSpeak: true, penOnly: true, repeat: 2, gap: 2,
-    filter: { lang: '전체', source: '전체', mode: 'unlearned', order: 'random', dir: 'w2m' }, penMode: 'recall', human: false, voice: {}, testN: 20, testType: 'mix' };
+    filter: { lang: '전체', source: '전체', mode: 'unlearned', order: 'random', dir: 'w2m' }, penMode: 'recall', human: false, voice: {}, testN: 20, testType: 'mix', testSpeed: 'none' };
   const ld = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } };
   const S = {
     words: ld('wa_words', []), base: ld('wa_base', {}), set: Object.assign({}, DEF, ld('wa_set', {})),
     view: 'study', study: null, listen: null, search: '', fl: { lang: '전체', source: '전체', st: '활성' }, shown: 100,
     sync: { busy: false, state: 'local', last: 0 },
+    prog: ld('wa_prog', {}), setSel: null, chunk: 0,
   };
+  if (!S.set.v4) { S.set.filter.mode = 'all'; S.set.filter.order = 'seq'; S.set.chunk = 30; S.set.v4 = 1; }
   S.set.filter = Object.assign({}, DEF.filter, S.set.filter);
   let saveT = null;
   function save() {
-    try { localStorage.setItem('wa_words', JSON.stringify(S.words)); localStorage.setItem('wa_base', JSON.stringify(S.base)); localStorage.setItem('wa_set', JSON.stringify(S.set)); }
+    try { localStorage.setItem('wa_words', JSON.stringify(S.words)); localStorage.setItem('wa_base', JSON.stringify(S.base)); localStorage.setItem('wa_set', JSON.stringify(S.set)); localStorage.setItem('wa_prog', JSON.stringify(S.prog)); }
     catch (e) { toast('저장 공간이 부족합니다'); }
   }
   function touch(w) { w.updated = Date.now(); save(); queueSync(); }
@@ -129,31 +131,104 @@
     $$('[data-f]').forEach(el => el.onchange = () => { S.set.filter[el.dataset.f] = el.value; save(); render(); });
   }
 
+  /* ---- 세트(단원) 중심 학습: 세트 목록 → 구간 → 단계별 학습 ---- */
+  const SPECIAL = { __wrong: '❌ 오답노트', __star: '⭐ 중요 단어', __all: '📚 전체 단어' };
+  const FLOW = ['learn', 'recall', 'spell', 'test'];
+  const MN = { learn: ['📖', '암기학습'], recall: ['🃏', '리콜학습(4지선다)'], spell: ['⌨️', '스펠학습'], test: ['📝', '테스트'], match: ['🧩', '매칭게임'], crash: ['☄️', '크래시'] };
+  const actv = () => S.words.filter(w => !w.deleted && w.word && w.meaning);
+  function setWords(key) {
+    const a = actv();
+    if (key === '__wrong') return a.filter(w => w.wrong > w.right);
+    if (key === '__star') return a.filter(w => w.star > 0);
+    if (key === '__all') return a;
+    return a.filter(w => w.source === key);
+  }
+  function chunkList(key) {
+    const all = setWords(key), n = S.set.chunk; if (!n) return [all];
+    const out = []; for (let i = 0; i < all.length; i += n) out.push(all.slice(i, i + n));
+    return out.length ? out : [[]];
+  }
+  const pkey = (key, ci) => key + '#' + (S.set.chunk || 0) + '#' + ci;
+  const stageOf = (key, ci, st) => (S.prog[pkey(key, ci)] || {})[st];
+  function markStage(stage, score) {
+    const st = S.study; if (!st || !st.setKey) return;
+    const p = S.prog[pkey(st.setKey, st.ci)] = S.prog[pkey(st.setKey, st.ci)] || {};
+    p[stage] = Core.today(); if (score != null) p.best = Math.max(p.best || 0, score); save();
+  }
+  function recordBest(field, val, lower) {
+    const st = S.study; if (!st || !st.setKey) return false;
+    const p = S.prog[pkey(st.setKey, st.ci)] = S.prog[pkey(st.setKey, st.ci)] || {};
+    const prev = p[field], better = prev == null || (lower ? val < prev : val > prev);
+    if (better) { p[field] = val; save(); }
+    return better && prev != null;
+  }
+  function nextHtml() {
+    const st = S.study; if (!st || !st.setKey) return '';
+    const nx = FLOW.find(f => !stageOf(st.setKey, st.ci, f));
+    const more = st.ci < chunkList(st.setKey).length - 1;
+    return (nx ? `<button class="pri" data-act="mode" data-m="${nx}">다음 단계 ▶ ${MN[nx][1]}</button>` : '')
+      + (more ? `<button class="${nx ? '' : 'pri'}" data-act="nextchunk">다음 구간 ▶</button>` : '');
+  }
   function viewStudy() {
     if (!S.words.length) return emptyState();
-    if (!S.study) {
-      main().innerHTML = `${filterBox(true, '학습 설정')}
-      <div class="card"><h2>학습 방식</h2><div class="modes">${MODES.map(([k, i, n, d]) => `<button class="mode" data-act="mode" data-m="${k}"><i>${i}</i><b>${n}</b><span>${d}</span></button>`).join('')}
-      <button class="mode" data-act="mode" data-m="pen"><i>✍️</i><b>필기 학습</b><span>펜으로 직접 써 보기 (탭 추천)</span></button></div>
-      <div class="grid2"><div><label>테스트 문항 수</label><select id="tn">${[[10, '10문제'], [20, '20문제'], [50, '50문제'], [0, '전체']].map(([k, v]) => `<option value="${k}" ${S.set.testN === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-      <div><label>테스트 유형</label><select id="tt">${[['mix', '섞어서'], ['mc', '객관식'], ['sub', '주관식']].map(([k, v]) => `<option value="${k}" ${S.set.testType === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div></div>`;
-      $('#tn').onchange = e => { S.set.testN = +e.target.value; save(); };
-      $('#tt').onchange = e => { S.set.testType = e.target.value; save(); };
-      bindFilters(); return;
-    }
-    renderSession();
+    if (S.study) return renderSession();
+    if (S.setSel) return setDetail();
+    const lg = S.set.filter.lang, A = actv().filter(w => lg === '전체' || w.lang === lg);
+    const by = new Map();
+    A.forEach(w => { const e = by.get(w.source) || { n: 0, d: 0 }; e.n++; if (w.done) e.d++; by.set(w.source, e); });
+    const card = ([name, e]) => {
+      const ch = chunkList(name), ok = ch.filter((_, i) => stageOf(name, i, 'test')).length;
+      return `<button class="setcard" data-act="openset" data-key="${esc(name)}"><div class="t">${esc(name || '(출처 없음)')}</div>
+        <div class="muted">${e.n}단어 · 구간 ${ok}/${ch.length} 완료</div><div class="bar"><i style="width:${Math.round(e.d / e.n * 100)}%;background:var(--ok)"></i></div><div class="muted">암기 ${e.d}/${e.n}</div></button>`;
+    };
+    const sp = k => `<button class="setcard" data-act="openset" data-key="${k}"><div class="t">${SPECIAL[k]}</div><div class="muted">${setWords(k).length}단어</div></button>`;
+    main().innerHTML = `<div class="row fixed" style="align-items:center;margin-bottom:8px"><h2 style="margin:0;flex:1">학습할 세트를 고르세요</h2>
+      <select data-f="lang" style="width:auto">${opts(langs(), lg, true)}</select></div>
+      <div class="setgrid">${sp('__wrong')}${sp('__star')}${sp('__all')}</div>
+      <h2 style="margin-top:14px">세트 (출처별)</h2><div class="setgrid">${[...by].map(card).join('') || '<p class="muted">단어가 없어요</p>'}</div>`;
+    bindFilters();
+  }
+  function setDetail() {
+    const key = S.setSel, chunks = chunkList(key);
+    S.chunk = Math.max(0, Math.min(S.chunk, chunks.length - 1));
+    const ci = S.chunk, list = chunks[ci], f = S.set.filter;
+    const rows = list.length;
+    const step = (m, i) => { const d = stageOf(key, ci, m); return `<button class="step ${d ? 'dn' : ''}" data-act="mode" data-m="${m}"><b>${i ? i : ''}</b><i>${MN[m][0]}</i><span>${MN[m][1]}${m === 'test' && (S.prog[pkey(key, ci)] || {}).best != null ? ` · 최고 ${S.prog[pkey(key, ci)].best}점` : ''}${m === 'match' && (S.prog[pkey(key, ci)] || {}).matchBest != null ? ` · 최고 ${S.prog[pkey(key, ci)].matchBest}초` : ''}${m === 'crash' && (S.prog[pkey(key, ci)] || {}).crashBest != null ? ` · 최고 ${S.prog[pkey(key, ci)].crashBest}점` : ''}</span><em>${d ? '✔ ' + d.slice(5) : ''}</em></button>`; };
+    main().innerHTML = `<div class="row fixed" style="align-items:center"><button class="ghost" data-act="backsets">← 세트</button><h2 style="margin:0;flex:1">${esc(SPECIAL[key] || key)}</h2></div>
+      <div class="card"><div class="row fixed" style="align-items:center;margin-bottom:8px"><span class="muted">구간 크기</span>
+        <select id="chsz" style="width:auto">${[[10, '10개'], [20, '20개'], [30, '30개'], [50, '50개'], [0, '전체']].map(([k, v]) => `<option value="${k}" ${S.set.chunk === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+        <span class="muted">${rows}단어</span></div>
+        <div class="pager">${chunks.map((c, i) => `<button class="${i === ci ? 'on' : ''}" data-act="chunk" data-i="${i}">${i + 1}${stageOf(key, i, 'test') ? '✔' : ''}</button>`).join('')}</div></div>
+      <div class="card"><h2>단계별 학습 (순서대로 추천)</h2><div class="steps">${FLOW.map((m, i) => step(m, i + 1)).join('')}</div>
+        <h2 style="margin-top:12px">게임 · 필기</h2><div class="steps">${step('match', 0)}${step('crash', 0)}
+        <button class="step" data-act="mode" data-m="pen"><b></b><i>✍️</i><span>필기 학습 (펜)</span><em></em></button></div></div>
+      <div class="card"><div class="grid2">
+        <div><label>대상</label><select data-f="mode">${[['all', '구간 전체'], ['unlearned', '미암기만'], ['wrong', '자주 틀린 것'], ['star', '★ 중요'], ['done', '암기한 것(복습)']].map(([k, v]) => `<option value="${k}" ${f.mode === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div><label>순서</label><select data-f="order">${[['seq', '입력 순서'], ['random', '무작위'], ['weak', '약한 것 먼저']].map(([k, v]) => `<option value="${k}" ${f.order === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div><label>카드 방향</label><select data-f="dir"><option value="w2m" ${f.dir === 'w2m' ? 'selected' : ''}>단어 → 뜻</option><option value="m2w" ${f.dir === 'm2w' ? 'selected' : ''}>뜻 → 단어</option></select></div>
+        <div><label>테스트</label><select id="tn">${[[10, '10문제'], [20, '20문제'], [50, '50문제'], [0, '전체']].map(([k, v]) => `<option value="${k}" ${S.set.testN === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div><label>테스트 속도</label><select id="ts">${[['none', '제한 없음'], ['slow', '느림 (20초)'], ['normal', '보통 (12초)'], ['fast', '빠름 (7초)'], ['vfast', '매우 빠름 (4초)']].map(([k, v]) => `<option value="${k}" ${S.set.testSpeed === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div><label>테스트 유형</label><select id="tt">${[['mix', '섞어서'], ['mc', '객관식'], ['sub', '주관식'], ['ls', '듣기']].map(([k, v]) => `<option value="${k}" ${S.set.testType === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div></div></div>
+      <details class="card"><summary>이 구간 단어 보기 (${rows})</summary><div class="list">${list.map(w => `<div class="it" data-id="${esc(w.id)}" style="grid-template-columns:auto 1fr auto"><span>${w.done ? '✅' : w.wrong > w.right ? '❌' : '⬜'}</span><div data-act="edit"><div class="w">${esc(w.word)}</div><div class="m">${esc(w.meaning)}</div></div><button class="ghost" data-act="say">🔈</button></div>`).join('')}</div></details>`;
+    $('#tn').onchange = e => { S.set.testN = +e.target.value; save(); };
+    $('#tt').onchange = e => { S.set.testType = e.target.value; save(); };
+    $('#ts').onchange = e => { S.set.testSpeed = e.target.value; save(); };
+    $('#chsz').onchange = e => { S.set.chunk = +e.target.value; S.chunk = 0; save(); render(); };
+    bindFilters();
   }
   const MODES = [['learn', '📖', '암기학습', '단어·뜻을 함께 보며 외우기'], ['recall', '🃏', '리콜학습', '떠올려 보고 알아요/몰라요'], ['spell', '⌨️', '스펠학습', '뜻을 보고 철자 입력'], ['match', '🧩', '매칭게임', '단어와 뜻 짝 맞추기'], ['crash', '☄️', '크래시', '떨어지는 뜻의 단어를 빨리!'], ['test', '📝', '테스트', '객관식·주관식 시험']];
   function renderSession() {
-    const st = S.study; if (st.mode === 'recall') return renderCard();
-    ({ learn: Modes.learn, spell: Modes.spell, test: Modes.test, match: Modes.matchDraw, crash: Modes.crashQ })[st.mode]();
+    const st = S.study; if (st.mode === 'pen') return renderCard();
+    ({ recall: Modes.recall, learn: Modes.learn, spell: Modes.spell, test: Modes.test, match: Modes.matchDraw, crash: Modes.crashQ })[st.mode]();
   }
   function startStudy(m) {
     const f = S.set.filter;
-    const q = Core.buildQueue(S.words, f);
-    if (!q.length) return toast('조건에 맞는 단어가 없어요');
-    const pen = m === 'pen', mode = pen ? 'recall' : (m || 'recall');
-    const st = S.study = { q, i: 0, rev: false, dir: pen ? 'm2w' : f.dir, pen, mode, trace: S.set.penMode === 'trace', ok: 0, bad: 0, again: new Set(), hint: 0, strokes: [], res: null };
+    const chunks = S.setSel ? chunkList(S.setSel) : [actv()];
+    const ci = Math.max(0, Math.min(S.chunk, chunks.length - 1));
+    const q = Core.buildQueue(chunks[ci], { lang: '전체', source: '전체', mode: f.mode, order: f.order });
+    if (!q.length) return toast('조건에 맞는 단어가 없어요 (대상 설정을 확인하세요)');
+    const pen = m === 'pen', mode = pen ? 'pen' : (m || 'recall');
+    const st = S.study = { q, i: 0, rev: false, dir: pen ? 'm2w' : f.dir, pen, mode, trace: S.set.penMode === 'trace', ok: 0, bad: 0, again: new Set(), known: new Set(), total: q.length, hint: 0, strokes: [], res: null, setKey: S.setSel, ci, stage: mode };
     wake(true); prefetch(q.slice(0, 30));
     if (mode === 'test') { Modes.buildTest(st); render(); }
     else if (mode === 'match') Modes.matchStart(st);
@@ -167,13 +242,13 @@
     if (!w) return finishStudy();
     const front = st.dir === 'w2m' ? w.word : w.meaning;
     const back = st.dir === 'w2m' ? w.meaning : w.word;
-    const pct = Math.round(st.i / st.q.length * 100);
+    const pct = Math.round(st.known.size / st.total * 100);
     main().innerHTML = `<div class="sess">
       <div class="row fixed" style="justify-content:space-between"><button class="ghost" data-act="quit">✕ 종료</button>
-        <span class="muted">${st.i + 1} / ${st.q.length} · ✅${st.ok} ❌${st.bad}</span>
+        <span class="muted">마스터 ${st.known.size}/${st.total} · 남은 카드 ${st.q.length - st.i} · ❌${st.bad}</span>
         <button class="ghost ${st.pen ? 'on' : ''}" data-act="togglepen">✍️ 필기</button></div>
       <div class="bar"><i style="width:${pct}%"></i></div>
-      <div class="card flash" id="flash">
+      <div class="card flash ${st.anim ? 'flip' : ''}" id="flash">
         <div class="meta"><span class="chip">${esc(w.lang)} · ${esc(w.source)}</span>
           <button class="star" data-act="star">${w.star ? '★' : '☆'}</button></div>
         <div class="front">${esc(front)}</div>
@@ -188,27 +263,28 @@
         <button class="pri" data-act="mem">🎯 암기완료<br><span class="kbd">3</span></button></div>`
         : `<div class="acts"><button class="pri" data-act="reveal">${st.pen ? '✔ 다 썼어요 (정답 보기)' : '정답 보기'}<br><span class="kbd">Space</span></button></div>`}
     </div>`;
+    st.anim = false;
     if (st.pen) initPad();
     if (!st.rev && st.dir === 'w2m' && S.set.autoSpeak) say(w);
     bindSwipe();
   }
 
-  function reveal() { const st = S.study; if (!st || st.rev) return; st.rev = true; if (st.pen) st.strokes = padSnapshot(); renderCard(); const w = curW(); if (st.dir === 'm2w' && S.set.autoSpeak) say(w); }
+  function reveal() { const st = S.study; if (!st || st.rev) return; st.rev = true; st.anim = true; if (st.pen) st.strokes = padSnapshot(); renderCard(); const w = curW(); if (st.dir === 'm2w' && S.set.autoSpeak) say(w); }
   function grade(kind) {
     const st = S.study; if (!st || !st.rev) return;
     const w = curW();
     w.reviews++; w.lastReview = Core.today();
-    if (kind === 'no') { w.wrong++; w.done = false; w.doneDate = ''; st.bad++; if (!st.again.has(w.id)) { st.again.add(w.id); st.q.push(w); } }
-    else { w.right++; st.ok++; if (kind === 'mem') { w.done = true; w.doneDate = Core.today(); } }
+    if (kind === 'no') { w.wrong++; w.done = false; w.doneDate = ''; st.bad++; st.q.splice(Math.min(st.q.length, st.i + 4), 0, w); }
+    else { w.right++; st.ok++; st.known.add(w.id); if (kind === 'mem') { w.done = true; w.doneDate = Core.today(); } }
     touch(w);
     st.i++; st.rev = false; st.hint = 0; st.strokes = [];
     renderCard();
   }
   function finishStudy() {
-    const st = S.study;
-    main().innerHTML = `<div class="card" style="text-align:center"><div class="big">🎉 완료!</div>
-      <p>✅ ${st.ok} &nbsp; ❌ ${st.bad} &nbsp; (총 ${st.i}장)</p>
-      <div class="row"><button class="pri" data-act="restart">같은 조건으로 다시</button><button data-act="quit">설정으로</button></div></div>`;
+    const st = S.study; markStage(st.stage);
+    main().innerHTML = `<div class="card" style="text-align:center"><div class="big">🎉 ${MN[st.stage] ? MN[st.stage][1] : ''} 완료!</div>
+      <p>${st.extra || `✅ ${st.ok} &nbsp; ❌ ${st.bad} &nbsp; (총 ${st.i}장)`}</p>
+      <div class="row">${nextHtml()}<button data-act="restart">다시 하기</button><button data-act="quit">세트로</button></div></div>`;
   }
   function bindSwipe() {
     const el = $('#flash'); if (!el) return;
@@ -561,12 +637,22 @@
     switch (act) {
       case 'sync': return sync(true);
       case 'mode': return startStudy(b.dataset.m);
+      case 'openset': S.setSel = b.dataset.key; S.chunk = 0; return render();
+      case 'backsets': S.setSel = null; return render();
+      case 'chunk': S.chunk = +b.dataset.i; return render();
+      case 'nextchunk': S.chunk++; S.study = null; Modes.stopTimers(); return render();
       case 'restart': return startStudy(S.study.pen ? 'pen' : S.study.mode);
       case 'quit': Modes.stopTimers(); stopSpeech(); S.study = null; return render();
       case 'lprevL': return Modes.learnPrev(); case 'lnextL': return Modes.learnNext(false); case 'lmemL': return Modes.learnNext(true);
       case 'spok': return Modes.spellCheck(); case 'spnext': return Modes.spellNext();
-      case 'sphint': { const v = $('#sp').value; S.study.hint = Math.min(curW().word.length, S.study.hint + 1); Modes.spell(); $('#sp').value = v; return; }
+      case 'sphint': { const v = $('#sp').value; S.study.hint = Math.min(curW().word.length, S.study.hint + 1); Modes.spell(); $('#sp').value = v; $('#sp').dispatchEvent(new Event('input')); return; }
       case 'splisten': return speakWord(curW());
+      case 'lautoL': return Modes.learnAuto();
+      case 'lrevL': return Modes.learnReveal();
+      case 'lconfL': return Modes.learnConfused();
+      case 'rcpick': return Modes.recallPick(+b.dataset.k);
+      case 'rcnext': return Modes.recallNext();
+      case 'tplay': return Modes.testPlay();
       case 'tch': return Modes.testPick(+b.dataset.k); case 'tskip': return Modes.testSkip(); case 'tsub': return Modes.testSub();
       case 'tnext': return Modes.testNext(); case 'tretry': return Modes.testRetry(); case 'tmem': return Modes.testMemAll();
       case 'mt': return Modes.matchTap(+b.dataset.k);
@@ -610,8 +696,9 @@
     const md = S.study.mode;
     if (md === 'spell' && S.study.res && e.key === 'Enter') return Modes.spellNext();
     if (md === 'test' && S.study.res && e.key === 'Enter') return Modes.testNext();
-    if (md === 'learn') { if (e.code === 'Space' || e.key === 'ArrowRight') { e.preventDefault(); Modes.learnNext(false); } else if (e.key === 'ArrowLeft') Modes.learnPrev(); return; }
-    if (md !== 'recall') return;
+    if (md === 'learn') { const rv = S.study.rev; if (e.code === 'Space' || e.key === 'ArrowRight') { e.preventDefault(); rv ? Modes.learnNext(false) : Modes.learnReveal(); } else if (e.key === 'ArrowLeft') rv ? Modes.learnConfused() : Modes.learnPrev(); return; }
+    if (md === 'recall') { if (S.study.res && (e.key === 'Enter' || e.code === 'Space')) { e.preventDefault(); Modes.recallNext(); } else if (!S.study.res && /^[1-4]$/.test(e.key)) Modes.recallPick(+e.key - 1); return; }
+    if (md !== 'pen') return;
     if (e.code === 'Space') { e.preventDefault(); S.study.rev ? grade('yes') : reveal(); }
     else if (S.study.rev) { if (e.key === 'ArrowLeft' || e.key === '1') grade('no'); else if (e.key === 'ArrowRight' || e.key === '2') grade('yes'); else if (e.key === '3') grade('mem'); }
     else if (e.key === 'Enter') reveal();
@@ -623,7 +710,7 @@
   /* ---------- 시작 ---------- */
   (async function boot() {
     applyTheme();
-    initModes({ S, Core, touch, speakWord, finishStudy, main, render, toast });
+    initModes({ S, Core, touch, speakWord, speakMeaning, finishStudy, main, render, toast, markStage, nextHtml, recordBest });
     if (window.speechSynthesis) speechSynthesis.onvoiceschanged = () => { if (S.view === 'settings') viewSettings(); };
     try { if (await Cloud.handleRedirect()) { go('settings'); toast('로그인 완료'); } } catch (e) { toast('로그인 실패: ' + e.message); }
     if (!$('#nav button.active')) go(S.view);
