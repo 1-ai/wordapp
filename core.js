@@ -103,13 +103,13 @@
   function parseBulk(text) {
     return text.split(/\r?\n/).map(s => s.trim()).filter(Boolean).map(line => {
       const m = line.split(/\t|\s*[,;:]\s*|\s+[-–=]\s+/);
-      if (m.length < 2) return null;
-      return { word: m[0].trim(), meaning: m.slice(1).join(', ').trim() };
-    }).filter(x => x && x.word && x.meaning);
+      const word = m[0].trim(), meaning = m.slice(1).join(', ').trim();   // 뜻이 없으면 빈 칸(시트가 자동 번역)
+      return word ? { word, meaning } : null;
+    }).filter(Boolean);
   }
 
   // 정답 채점용 정규화
-  const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9가-힣]/g, '');
+  const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9가-힣]/g, '');
 
   const api = { COLS, HEADERS, K, fromRow, toRow, newId, merge, buildQueue, shuffle, parseBulk, norm, today,
     serialToDate, dateToSerial, serialToMs, msToSerial, sameContent, sig };

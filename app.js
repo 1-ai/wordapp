@@ -444,7 +444,7 @@
       <div class="card list">${list.map(w => `<div class="it ${w.deleted ? 'del' : ''}" data-id="${esc(w.id)}">
         <input type="checkbox" data-act="done" ${w.done ? 'checked' : ''} aria-label="암기">
         <div data-act="edit"><div class="w">${esc(w.word)} ${w.star ? '⭐' : ''}${w.wrong > w.right ? '<span class="badge w">어려움</span>' : ''}</div>
-          <div class="m">${esc(w.meaning)}</div><div class="m" style="font-size:.72rem">${esc(w.lang)} · ${esc(w.source)}</div></div>
+          <div class="m">${w.meaning ? esc(w.meaning) : '<i>(뜻 자동 입력 대기)</i>'}</div><div class="m" style="font-size:.72rem">${esc(w.lang)} · ${esc(w.source)}</div></div>
         <button class="ghost" data-act="say">🔈</button></div>`).join('') || '<p class="muted">없음</p>'}
         ${total > list.length ? `<button style="width:100%" data-act="more">더 보기 (${total - list.length})</button>` : ''}</div>
       <button class="pri fab" data-act="add" aria-label="추가">＋</button>`;
@@ -466,7 +466,8 @@
     $('#e_cancel').onclick = closeDlg;
     $('#e_ok').onclick = () => {
       const word = $('#e_word').value.trim(), meaning = $('#e_meaning').value.trim();
-      if (!word || !meaning) return toast('단어와 뜻을 입력하세요');
+      if (!word) return toast('단어를 입력하세요');
+      if (!meaning) toast('뜻을 비워 두면 구글 시트가 몇 분 안에 자동으로 채워요');
       if (isNew) { w.id = Core.newId(); w.date = Core.today(); w.reviews = w.right = w.wrong = 0; w.doneDate = w.lastReview = ''; S.words.push(w); }
       Object.assign(w, { word, meaning, lang: $('#e_lang').value.trim() || '영어', source: $('#e_source').value.trim(), memo: $('#e_memo').value, star: $('#e_star').checked ? 1 : 0 });
       const d = $('#e_done').checked; if (d && !w.done) w.doneDate = Core.today(); if (!d) w.doneDate = ''; w.done = d;
@@ -476,8 +477,8 @@
     if (isNew) $('#e_word').focus();
   }
   function bulkDlg() {
-    openDlg(`<h2>여러 단어 붙여넣기</h2><p class="muted">한 줄에 하나: <code>단어, 뜻</code> (쉼표·탭·콜론 구분). 엑셀에서 두 열을 복사해 붙여넣어도 돼요.</p>
-      <textarea id="b_t" placeholder="apple, 사과&#10;banana, 바나나"></textarea>
+    openDlg(`<h2>여러 단어 붙여넣기</h2><p class="muted">한 줄에 하나: <code>단어, 뜻</code> (쉼표·탭·콜론 구분). <b>뜻 없이 단어만 적어도 돼요</b> — 구글 시트 자동 채우기를 설치했다면 뜻을 찾아 채워 줍니다.</p>
+      <textarea id="b_t" placeholder="apple, 사과&#10;banana&#10;candle"></textarea>
       <div class="grid2"><div><label>언어</label><input id="b_lang" list="dl_lang" value="${esc(S.fl.lang !== '전체' ? S.fl.lang : '영어')}"></div><div><label>출처</label><input id="b_src" list="dl_src" value="${esc(S.fl.source !== '전체' ? S.fl.source : '직접 입력')}"></div></div>
       <datalist id="dl_lang">${langs().map(l => `<option>${esc(l)}`).join('')}</datalist><datalist id="dl_src">${sources().map(l => `<option>${esc(l)}`).join('')}</datalist>
       <div class="row" style="margin-top:14px"><button id="b_cancel">취소</button><button class="pri" id="b_ok">추가</button></div>`);
