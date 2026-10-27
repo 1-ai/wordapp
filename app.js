@@ -465,9 +465,20 @@
       <div class="row" style="margin-top:14px">${!isNew ? `<button class="bad" id="e_del">${w.deleted ? '복원' : '삭제'}</button>` : ''}<button id="e_cancel">취소</button><button class="pri" id="e_ok">저장</button></div>`);
     $('#e_cancel').onclick = closeDlg;
     $('#e_ok').onclick = () => {
-      const word = $('#e_word').value.trim(), meaning = $('#e_meaning').value.trim();
+      const lang0 = $('#e_lang').value.trim() || '영어';
+      const sp = Core.splitMixed($('#e_word').value, $('#e_meaning').value, lang0, true);
+      if (sp.reject) return toast(sp.reject);
+      const word = sp.word, meaning = sp.meaning;
       if (!word) return toast('단어를 입력하세요');
-      if (!meaning) toast('뜻을 비워 두면 구글 시트가 몇 분 안에 자동으로 채워요');
+      if (sp.note) toast(sp.note); else if (!meaning) toast('뜻을 비워 두면 구글 시트가 몇 분 안에 자동으로 채워요');
+      if (isNew) {
+        const dup = S.words.find(x => !x.deleted && x.lang === lang0 && x.word.toLowerCase() === word.toLowerCase());
+        if (dup) {                                              // 이미 있는 단어 → 새 행을 만들지 않고 뜻만 합침
+          const nm = Core.mergeMeaning(dup.meaning, meaning);
+          if (nm !== dup.meaning) { dup.meaning = nm; touch(dup); }
+          closeDlg(); render(); return toast(`이미 있는 단어예요 → ${dup.word} = ${dup.meaning}`);
+        }
+      }
       if (isNew) { w.id = Core.newId(); w.date = Core.today(); w.reviews = w.right = w.wrong = 0; w.doneDate = w.lastReview = ''; S.words.push(w); }
       Object.assign(w, { word, meaning, lang: $('#e_lang').value.trim() || '영어', source: $('#e_source').value.trim(), memo: $('#e_memo').value, star: $('#e_star').checked ? 1 : 0 });
       const d = $('#e_done').checked; if (d && !w.done) w.doneDate = Core.today(); if (!d) w.doneDate = ''; w.done = d;
@@ -477,7 +488,7 @@
     if (isNew) $('#e_word').focus();
   }
   function bulkDlg() {
-    openDlg(`<h2>여러 단어 붙여넣기</h2><p class="muted">한 줄에 하나: <code>단어, 뜻</code> (쉼표·탭·콜론 구분). <b>뜻 없이 단어만 적어도 돼요</b> — 구글 시트 자동 채우기를 설치했다면 뜻을 찾아 채워 줍니다.</p>
+    openDlg(`<h2>여러 단어 붙여넣기</h2><p class="muted">한 줄에 하나: <code>단어, 뜻</code> (쉼표·탭·콜론 구분).<br>• 뜻이 여러 개: <code>apple, 사과, 애플</code> · <code>apple: 사과; 애플</code><br>• 같은 단어를 또 적으면 새 뜻만 합쳐요<br>• <code>apple 사과</code>처럼 붙여 적으면 자동으로 나눠요<br>• 뜻 없이 단어만 적어도 돼요 (구글 시트 자동 채우기가 채움)</p>
       <textarea id="b_t" placeholder="apple, 사과&#10;banana&#10;candle"></textarea>
       <div class="grid2"><div><label>언어</label><input id="b_lang" list="dl_lang" value="${esc(S.fl.lang !== '전체' ? S.fl.lang : '영어')}"></div><div><label>출처</label><input id="b_src" list="dl_src" value="${esc(S.fl.source !== '전체' ? S.fl.source : '직접 입력')}"></div></div>
       <datalist id="dl_lang">${langs().map(l => `<option>${esc(l)}`).join('')}</datalist><datalist id="dl_src">${sources().map(l => `<option>${esc(l)}`).join('')}</datalist>
@@ -486,13 +497,22 @@
     $('#b_ok').onclick = () => {
       const items = Core.parseBulk($('#b_t').value); if (!items.length) return toast('인식된 줄이 없어요');
       const lang = $('#b_lang').value.trim() || '영어', source = $('#b_src').value.trim();
-      const have = new Set(S.words.filter(w => !w.deleted).map(w => w.lang + '|' + w.word.toLowerCase()));
-      let n = 0, skip = 0;
-      for (const it of items) {
-        if (have.has(lang + '|' + it.word.toLowerCase())) { skip++; continue; }
+      const find = word => S.words.find(w => !w.deleted && w.lang === lang && w.word.toLowerCase() === word.toLowerCase());
+      let n = 0, merged = 0, split = 0, same = 0; const rejected = [];
+      for (const it0 of items) {
+        const it = Core.splitMixed(it0.word, it0.meaning, lang, true);
+        if (it.reject) { rejected.push(it0.word + (it0.meaning ? ' ' + it0.meaning : '')); continue; }
+        if (it.changed) split++;
+        const dup = find(it.word);
+        if (dup) {                                              // 같은 단어가 또 나오면 뜻을 합침 (뜻이 여러 개인 단어)
+          const nm = Core.mergeMeaning(dup.meaning, it.meaning);
+          if (nm !== dup.meaning) { dup.meaning = nm; touch(dup); merged++; } else same++;
+          continue;
+        }
         S.words.push({ id: Core.newId(), date: Core.today(), lang, source, word: it.word, meaning: it.meaning, done: false, doneDate: '', reviews: 0, right: 0, wrong: 0, lastReview: '', star: 0, memo: '', updated: Date.now(), deleted: false }); n++;
       }
-      save(); queueSync(); closeDlg(); render(); toast(`${n}개 추가${skip ? `, 중복 ${skip}개 건너뜀` : ''}`);
+      save(); queueSync(); closeDlg(); render();
+      toast(`${n}개 추가` + (merged ? ` · 뜻 합침 ${merged}` : '') + (same ? ` · 중복 ${same}` : '') + (split ? ` · 자동 분리 ${split}` : '') + (rejected.length ? ` · 거절 ${rejected.length}: ${rejected.slice(0, 2).join(', ')}${rejected.length > 2 ? '…' : ''}` : ''));
     };
   }
   function openDlg(html) { const d = $('#dlg'); d.innerHTML = html; if (!d.open) d.showModal(); }
@@ -578,7 +598,7 @@
         } else return toast('인식할 수 없는 엑셀 형식이에요');
         for (const w of list) if (!w.id) w.id = Core.newId();
         const m = Core.merge(S.words, list, S.base);
-        S.words = m.rows; save(); queueSync(); toast(`${list.length}개 불러왔어요`); render();
+        S.words = m.rows.concat(S.words.filter(w => m.removed.includes(w.id))); save(); queueSync(); toast(`${list.length}개 불러왔어요`); render();
       } catch (e) { toast('불러오기 실패: ' + e.message); }
     };
     rd.readAsArrayBuffer(f);
@@ -620,16 +640,35 @@
         if (!w.id) { w.id = Core.newId(); w.updated = Date.now(); fresh.add(w.id); }
         rowOf.set(w.id, firstRow + idx); remote.push(w);
       });
-      const m = Core.merge(S.words, remote, S.base);
+      if (!remote.length && Object.keys(S.base).length) throw new Error('시트에서 단어가 하나도 읽히지 않아 동기화를 멈췄어요 (시트·탭 이름 확인)');
+      // 첫 연결/가져오기로 ID만 다른 같은 단어가 앱에 있으면: 시트 행을 쓰고 학습 기록만 옮김
+      const rKey = w => w.lang + '|' + w.word.toLowerCase() + '|' + w.source;
+      const rByKey = new Map(remote.filter(w => !w.deleted).map(w => [rKey(w), w]));
+      const rIds = new Set(remote.map(w => w.id));
+      const local = S.words.filter(l => {
+        if (rIds.has(l.id) || S.base[l.id]) return true;
+        const r2 = rByKey.get(rKey(l)); if (!r2) return true;
+        if ((l.reviews || 0) > (r2.reviews || 0)) { ['done', 'doneDate', 'reviews', 'right', 'wrong', 'lastReview'].forEach(k => { r2[k] = l[k]; }); fresh.add(r2.id); }
+        return false;
+      });
+      const m = Core.merge(local, remote, S.base);
       const upd = [], add = [], pushed = new Set();
       for (const w of m.toPush) { pushed.add(w.id); rowOf.has(w.id) ? upd.push({ sheetRow: rowOf.get(w.id), cells: Core.toRow(w) }) : add.push(w); }
       for (const w of m.rows) if (fresh.has(w.id) && !pushed.has(w.id)) upd.push({ sheetRow: rowOf.get(w.id), cells: Core.toRow(w) });
+      // 처음 연결(기준 없음)인데 앱에만 있는 단어가 있으면, 시트에서 지운 값이 되살아나지 않도록 물어봄
+      if (!Object.keys(S.base).length && remote.length && add.length) {
+        if (!manual) { setSync('err', `처음 연결: 앱에만 있는 단어 ${add.length}개 확인 필요 → 설정에서 "지금 동기화"`); return; }
+        if (!confirm(`앱에만 있는 단어 ${add.length}개를 시트에 추가할까요?
+[취소]를 누르면 시트에 없는 단어는 앱에서 지웁니다. (시트가 기준)`)) {
+          const drop = new Set(add.map(w => w.id)); m.rows = m.rows.filter(w => !drop.has(w.id)); add.length = 0;
+        }
+      }
       if (upd.length) await Cloud.writeRows(upd);
       if (add.length) await Cloud.addRows(add.map(Core.toRow), firstRow + values.length);
-      S.words = m.rows; S.base = {}; S.words.forEach(w => S.base[w.id] = Core.sig(w));
+      S.words = m.rows; S.base = {}; S.words.forEach(w => S.base[w.id] = Core.snap(w));
       S.sync.last = Date.now(); save(); setSync('ok');
-      if (manual || m.changedLocal) toast(`동기화 완료 (↓${m.changedLocal} ↑${upd.length + add.length})`);
-      if (m.changedLocal && !S.study && !S.listen) render();
+      if (manual || m.changedLocal || m.removed.length) toast(`동기화 완료 (↓${m.changedLocal} ↑${upd.length + add.length}${m.removed.length ? ` · 시트에서 삭제된 ${m.removed.length}개 제거` : ''})`);
+      if ((m.changedLocal || m.removed.length) && !S.study && !S.listen) render();
     } catch (e) {
       if (e.message === 'NEEDLOGIN') { setSync('err', '다시 로그인이 필요해요 → 설정에서 "지금 동기화"'); if (manual) toast('로그인 창이 열리지 않았어요. 팝업 허용 후 다시 눌러 주세요'); }
       else { setSync('err', e.message); if (manual) toast('동기화 실패: ' + e.message); }
